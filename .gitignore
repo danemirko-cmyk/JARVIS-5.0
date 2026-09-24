@@ -1,0 +1,42 @@
+# ==========================================
+# JARVIS 5.0 - Git Ignore
+# ==========================================
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# WhatsApp sessions
+auth_info/
+auth/
+sessions/
+
+# Database
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+logs/
+*.log
+
+# Backups
+backups/
+*.backup
+*.bak
+
+# Dependencies
+node_modules/
+
+# Archives
+*.tar
+*.tar.gz
+*.zip
+*.rar
+*.7z
+
+# Termux / OS
+.DS_Store
+Thumbs.db
