@@ -1,6 +1,5 @@
 import { isOwnerPhone } from '../services/owners.js';
 
-
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -8,6 +7,7 @@ import { isOwnerPhone } from '../services/owners.js';
 function cleanJid(value) {
   return String(value || '')
     .trim()
+    .toLowerCase()
     .replace(/:\d+(?=@)/, '');
 }
 
@@ -18,110 +18,74 @@ function cleanPhone(value) {
     .replace(/[^0-9]/g, '');
 }
 
+/* =========================================================
+   RECUPERA TUTTI I POSSIBILI IDENTIFICATIVI DEL MITTENTE
+========================================================= */
+
+function getSenderCandidates(context) {
+  const values = [
+    context?.sender,
+
+    context?.message?.key?.participant,
+    context?.message?.key?.participantAlt,
+    context?.message?.key?.participantPn,
+    context?.message?.key?.senderPn,
+
+    context?.message?.message?.extendedTextMessage
+      ?.contextInfo?.participant,
+
+    context?.message?.message?.extendedTextMessage
+      ?.contextInfo?.participantAlt,
+
+    context?.message?.message?.extendedTextMessage
+      ?.contextInfo?.participantPn
+  ];
+
+  return [
+    ...new Set(
+      values
+        .filter(Boolean)
+        .map(cleanJid)
+    )
+  ];
+}
 
 /* =========================================================
    RECUPERA TUTTI I POSSIBILI NUMERI DEL MITTENTE
 ========================================================= */
 
 function getPossiblePhones(context) {
+  const phones = new Set();
 
-  const phones =
-    new Set();
-
-  const addPhone = value => {
-
-    const phone =
-      cleanPhone(value);
+  for (const value of getSenderCandidates(context)) {
+    const phone = cleanPhone(value);
 
     if (phone) {
       phones.add(phone);
     }
-  };
-
-
-  /*
-   * Mittente principale
-   */
-
-  addPhone(
-    context?.sender
-  );
-
-
-  /*
-   * Participant del messaggio
-   */
-
-  addPhone(
-    context?.message?.key?.participant
-  );
-
-
-  /*
-   * ParticipantPn.
-   *
-   * Questo è particolarmente importante
-   * con i nuovi identificativi WhatsApp/LID.
-   */
-
-  addPhone(
-    context?.message?.key?.participantPn
-  );
-
-
-  /*
-   * Alcuni messaggi possono avere il participant
-   * dentro remoteJid / contextInfo.
-   */
-
-  addPhone(
-    context?.message?.extendedTextMessage
-      ?.contextInfo?.participant
-  );
-
-  addPhone(
-    context?.message?.extendedTextMessage
-      ?.contextInfo?.participantPn
-  );
-
+  }
 
   return [
     ...phones
   ];
 }
 
-
 /* =========================================================
    VERIFICA OWNER
 ========================================================= */
 
 function isOwner(context) {
-
   const possiblePhones =
     getPossiblePhones(context);
 
-
-  /*
-   * Controlliamo ogni numero contro
-   * il database degli owner.
-   */
-
-  for (
-    const phone of possiblePhones
-  ) {
-
-    if (
-      isOwnerPhone(phone)
-    ) {
+  for (const phone of possiblePhones) {
+    if (isOwnerPhone(phone)) {
       return true;
     }
   }
 
-
   /*
-   * Controllo speciale del numero
-   * del bot stesso.
-   *
+   * Controllo speciale del bot stesso.
    * JARVIS non deve essere bloccato
    * dai permessi OWNER.
    */
@@ -141,21 +105,24 @@ function isOwner(context) {
       context?.sock?.user?.lid
     );
 
+  const ownPhone =
+    cleanJid(
+      context?.sock?.user?.phoneNumber
+    );
 
   if (
     sender &&
     (
       sender === ownId ||
-      sender === ownLid
+      sender === ownLid ||
+      sender === ownPhone
     )
   ) {
     return true;
   }
 
-
   return false;
 }
-
 
 /* =========================================================
    VERIFICA ADMIN GRUPPO
@@ -167,16 +134,13 @@ async function isGroupAdmin(
   sender,
   message
 ) {
-
   if (
     !chat?.endsWith('@g.us')
   ) {
     return false;
   }
 
-
   try {
-
     const metadata =
       await sock.groupMetadata(
         chat
@@ -185,92 +149,114 @@ async function isGroupAdmin(
     const participants =
       metadata?.participants || [];
 
+    /*
+     * Tutti gli identificativi possibili
+     * del mittente.
+     */
 
-    const senderJid =
-      cleanJid(sender);
+    const senderCandidates = [
+      sender,
 
-    const participantPn =
-      cleanJid(
-        message?.key?.participantPn
-      );
+      message?.key?.participant,
+      message?.key?.participantAlt,
+      message?.key?.participantPn,
+      message?.key?.senderPn,
 
+      message?.message?.extendedTextMessage
+        ?.contextInfo?.participant,
+
+      message?.message?.extendedTextMessage
+        ?.contextInfo?.participantAlt,
+
+      message?.message?.extendedTextMessage
+        ?.contextInfo?.participantPn
+    ]
+      .filter(Boolean)
+      .map(cleanJid);
+
+    const uniqueSenderCandidates =
+      [
+        ...new Set(
+          senderCandidates
+        )
+      ];
+
+    /*
+     * Numeri telefonici del mittente.
+     */
+
+    const senderPhones =
+      [
+        ...new Set(
+          uniqueSenderCandidates
+            .map(cleanPhone)
+            .filter(Boolean)
+        )
+      ];
+
+    /*
+     * Cerchiamo il partecipante corrispondente.
+     */
 
     const found =
       participants.find(
         participant => {
 
-          const id =
-            cleanJid(
-              participant?.id
-            );
-
-          const lid =
-            cleanJid(
-              participant?.lid
-            );
-
-          const phone =
-            cleanJid(
-              participant?.phoneNumber
-            );
-
+          const participantCandidates = [
+            participant?.id,
+            participant?.jid,
+            participant?.lid,
+            participant?.phoneNumber,
+            participant?.participant,
+            participant?.participantAlt
+          ]
+            .filter(Boolean)
+            .map(cleanJid);
 
           /*
-           * ID diretto
+           * 1. Confronto diretto degli identificativi.
            */
 
-          if (
-            senderJid &&
-            (
-              id === senderJid ||
-              lid === senderJid
-            )
-          ) {
+          const directMatch =
+            participantCandidates.some(
+              candidate =>
+                uniqueSenderCandidates.includes(
+                  candidate
+                )
+            );
+
+          if (directMatch) {
             return true;
           }
 
-
           /*
-           * Numero reale
+           * 2. Confronto tramite numero telefonico.
            */
 
-          if (
-            participantPn &&
-            phone &&
-            cleanPhone(
-              participantPn
-            ) ===
-            cleanPhone(phone)
-          ) {
-            return true;
-          }
+          const participantPhones =
+            participantCandidates
+              .map(cleanPhone)
+              .filter(Boolean);
 
+          const phoneMatch =
+            senderPhones.some(
+              phone =>
+                participantPhones.includes(
+                  phone
+                )
+            );
 
-          /*
-           * Confronto numero con ID
-           */
-
-          if (
-            participantPn &&
-            id.endsWith(
-              '@s.whatsapp.net'
-            ) &&
-            cleanPhone(id) ===
-            cleanPhone(participantPn)
-          ) {
-            return true;
-          }
-
-
-          return false;
+          return phoneMatch;
         }
       );
-
 
     if (!found) {
       return false;
     }
 
+    /*
+     * Verifica effettivo stato admin.
+     */
 
     return (
       found.admin === 'admin' ||
@@ -279,18 +265,16 @@ async function isGroupAdmin(
       found.isSuperAdmin === true
     );
 
-
   } catch (error) {
 
     console.error(
       '[PERMISSIONS] Errore verifica admin:',
-      error.message
+      error?.message || error
     );
 
     return false;
   }
 }
-
 
 /* =========================================================
    CONTROLLO PERMESSI
@@ -300,12 +284,10 @@ export async function checkPermission(
   permission,
   context
 ) {
-
   const required =
     String(
       permission || 'USER'
     ).toUpperCase();
-
 
   /* =======================================================
      USER
@@ -314,13 +296,11 @@ export async function checkPermission(
   if (
     required === 'USER'
   ) {
-
     return {
       allowed: true,
       role: 'USER'
     };
   }
-
 
   /* =======================================================
      OWNER
@@ -333,20 +313,17 @@ export async function checkPermission(
     if (
       isOwner(context)
     ) {
-
       return {
         allowed: true,
         role: 'OWNER'
       };
     }
 
-
     return {
       allowed: false,
       role: 'USER'
     };
   }
-
 
   /* =======================================================
      ADMIN
@@ -356,22 +333,19 @@ export async function checkPermission(
     required === 'ADMIN'
   ) {
 
-
     /*
-     * Un owner è automaticamente considerato
-     * autorizzato anche per i comandi admin.
+     * Il proprietario è automaticamente
+     * autorizzato ai comandi admin.
      */
 
     if (
       isOwner(context)
     ) {
-
       return {
         allowed: true,
         role: 'OWNER'
       };
     }
-
 
     const admin =
       await isGroupAdmin(
@@ -381,22 +355,18 @@ export async function checkPermission(
         context.message
       );
 
-
     if (admin) {
-
       return {
         allowed: true,
         role: 'ADMIN'
       };
     }
 
-
     return {
       allowed: false,
       role: 'USER'
     };
   }
-
 
   /* =======================================================
      PERMESSO SCONOSCIUTO
@@ -408,7 +378,6 @@ export async function checkPermission(
   };
 }
 
-
 /* =========================================================
    REQUIRE PERMISSION
 ========================================================= */
@@ -417,13 +386,11 @@ export async function requirePermission(
   permission,
   context
 ) {
-
   const result =
     await checkPermission(
       permission,
       context
     );
-
 
   if (
     result.allowed
@@ -431,10 +398,8 @@ export async function requirePermission(
     return true;
   }
 
-
   let text =
     '🚫 *Accesso negato.*\n\n';
-
 
   if (
     String(permission).toUpperCase() ===
@@ -458,7 +423,6 @@ export async function requirePermission(
       '❌ Non hai i permessi necessari.';
   }
 
-
   try {
 
     await context.sock.sendMessage(
@@ -472,10 +436,9 @@ export async function requirePermission(
 
     console.error(
       '[PERMISSIONS] Impossibile inviare il messaggio:',
-      error.message
+      error?.message || error
     );
   }
-
 
   return false;
 }
